@@ -1,0 +1,1411 @@
+from flask import Flask, jsonify, request
+from pymongo import MongoClient
+
+
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import FAISS
+import openai
+import os
+import json
+
+from googlesearch import search  
+from urllib.request import urlopen
+from bs4 import BeautifulSoup
+
+
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import FAISS
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from langchain.document_loaders import Docx2txtLoader
+from langchain.document_loaders.csv_loader import CSVLoader
+from langchain.document_loaders import UnstructuredHTMLLoader
+from langchain.document_loaders import UnstructuredPowerPointLoader
+from langchain.document_loaders import UnstructuredFileLoader
+from langchain.document_loaders import UnstructuredURLLoader
+import json
+import ast
+
+from langchain.text_splitter import Document
+
+from pytube import YouTube
+from moviepy.editor import AudioFileClip
+import whisper
+
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+
+from bson import json_util
+import json
+from flask import jsonify
+from dotenv import load_dotenv
+from flask_cors import CORS
+
+from datetime import datetime
+
+
+def load_env():
+    env = os.environ.get('NODE_ENV', 'local')
+
+    if env == 'staging':
+        dotenv_path = '.env.staging'
+    elif env == 'production':
+        dotenv_path = '.env.production'
+    elif env == 'local':
+        dotenv_path = '.env.local'
+    else:
+        dotenv_path = '.env.local'
+
+    load_dotenv(dotenv_path=dotenv_path)
+
+load_env()
+
+'''
+try:
+    nltk.data.find('tokenizers/punkt')
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('punkt')
+    nltk.download('stopwords')
+    print("Packages 'punkt' and 'stopwords' were not found and have been installed.")
+
+
+
+embeddings = HuggingFaceEmbeddings()
+'''
+
+#openai.api_key = "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"
+openai.api_key = "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"
+
+
+directory_main = "Chatbot"
+os.makedirs(directory_main, exist_ok=True)
+
+directory_temp = "TEMP"
+os.makedirs(directory_temp, exist_ok=True)
+
+##############################################################################################################################
+
+
+
+
+def URL_Crawler(URL,UserID,Chatbot_ID):
+    def add_c(urls, c_cart):
+        url = urls
+        html = urlopen(url).read()
+        soup = BeautifulSoup(html, features="html.parser")
+
+        # kill all script and style elements
+        for script in soup(["script", "style"]):
+            script.extract()  # rip it out
+
+        # get text
+        text = soup.get_text()
+
+        # break into lines and remove leading and trailing space on each
+        lines = (line.strip() for line in text.splitlines())
+        # break multi-headlines into a line each
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        # drop blank lines
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+
+        c_cart.append(text)
+
+    def link_crawler(urls, c_cart, url_list):
+        url = urls
+        query_S = "site:" + str(url)
+        query = query_S
+
+        count = 0
+        try:
+            for j in search(query):
+                if count >= 200:  # Adjust the desired number of URLs here
+                    break
+                print(j)
+                add_c(j, c_cart)
+                count += 1
+                url_list.append(j)
+        except Exception as e:
+            print("Timeout")
+            print("Error: ", e)
+            pass
+            '''
+            try:
+                for j in search(query, tld="com", num=1, stop=100, pause=10):
+                    print(j)
+                    add_c(j, c_cart)
+                    count += 1
+                    url_list.append(j)
+            except:
+                for j in search(query, num_results=10, pause=10):
+                    print(j)
+                    add_c(j, c_cart)
+                    count += 1
+                    url_list.append(j)
+            '''
+             
+    c_cart = []
+    url_list = []
+    limit = 10
+    link_crawler(URL, c_cart, url_list)
+
+    docss = [Document(page_content=element) for element in c_cart]
+
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+    docs = text_splitter.split_documents(docss)
+
+
+    if URL.startswith("https://"):
+        url = URL[len("https://"):]
+
+    url = url.replace("/", "_")
+
+    # Create the directory if it doesn't exist
+    directory = f"Chatbot/{UserID}/{Chatbot_ID}"
+    os.makedirs(directory, exist_ok=True)
+    # Create the file path
+    file_path = os.path.join(directory, f"URL_{url}.txt")
+    link_file_path = os.path.join(directory, f"LINK_{url}.txt")
+
+
+    with open(file_path, 'w', encoding='utf-8', errors='ignore') as f:
+        for doc in docs:
+            f.write(str(doc))
+            f.write('\n\n')
+            
+    with open(link_file_path, 'w', encoding='utf-8', errors='ignore') as f:
+        for link in url_list:
+            f.write(link)
+            f.write('\n')
+            
+    char_list = []
+    for pages in c_cart:
+        char_list.append(len(pages))
+    
+    return url_list, char_list
+
+########################
+"""
+def search_urls(user_input, file_path):
+    with open(file_path, 'r' ,encoding='utf-8') as file:
+        urls = file.readlines()
+
+    matching_urls = [(index, url.strip()) for index, url in enumerate(urls) if user_input in url]
+    return matching_urls
+"""
+
+def search_urls(user_input, file_path):
+    with open(file_path, 'r') as file:
+        urls = file.readlines()
+
+    matching_urls = [(index, url.strip()) for index, url in enumerate(urls) if user_input.strip() == url.strip()]
+
+    # Remove matched URL(s) from the file
+    if matching_urls:
+        with open(file_path, 'w') as file:
+            for index, url in enumerate(urls):
+                if user_input.strip() != url.strip():
+                    file.write(url)
+
+    return matching_urls
+
+def remove_paragraph_by_index(index, file_path):
+    with open(file_path, 'r', encoding='utf-8') as file:
+        paragraphs = file.read().split("\n\n")
+
+    if index >= 0 and index < len(paragraphs):
+        del paragraphs[index]
+
+    with open(file_path, 'w') as file:
+        file.write("\n\n".join(paragraphs))
+
+########################
+
+
+def YT_Crawler(YT_URL):
+    def download_and_convert_to_mp3(url, output_path):
+        yt = YouTube(url)
+        video_title = yt.title
+        stream = yt.streams.filter(only_audio=True).first()
+        out_file = stream.download(output_path=output_path)
+        print(video_title)
+
+        return video_title
+
+    custom_path = "TEMP"
+
+    video = download_and_convert_to_mp3(YT_URL, custom_path)
+
+    current_directory = os.getcwd()
+    file_path = custom_path + "/" + video + ".mp4"
+    print(file_path)
+
+    model = whisper.load_model("base")
+    full_path = os.path.abspath(file_path)
+    print('full_path: ', full_path)
+
+    result = model.transcribe(full_path)
+    print('result: ', result)
+
+    transcript = result["text"]
+    print('transcript: ', transcript)
+
+    os.remove(full_path)
+
+    document = Document(page_content=transcript)
+    docs = [document]  # Wrap the document in a list
+
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+    docs = text_splitter.split_documents(docs)
+
+    return docs, video
+
+
+
+def Audio_Crawler(Audio_Path):
+  
+  model = whisper.load_model("base")
+  full_path = os.path.abspath(Audio_Path)
+  print('full_path: ',full_path)
+  
+  result = model.transcribe(full_path)
+  print('result: ',result)
+  
+  transcript= result["text"]
+  print('transcript: ', transcript)
+  
+  #os.remove(full_path)
+
+  document = Document(page_content=transcript)
+  docs = [document]  # Wrap the document in a list
+
+  text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+  docs = text_splitter.split_documents(docs)
+
+  #custom_path = "/TEMP"
+
+  return docs
+
+
+def Document_Creation(file_path):
+
+  def load_document(file_path):
+      
+      print("loader_doc: ", file_path)
+      extension = file_path.split('.')[-1]
+      print(extension)
+      if extension == 'txt':
+          print("i am txt")
+          loader = UnstructuredFileLoader(file_path)
+          return loader
+
+      else:
+          print(file_path)
+          raise ValueError("Unsupported file format.")
+
+  print("func: " ,file_path)  
+  files= load_document(file_path)
+  
+  documents = files.load_and_split()
+  
+  text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+  docs = text_splitter.split_documents(documents)
+  
+
+  return docs
+
+
+##############--------------############# 
+
+def indexer(query, emb_path):
+  # Define the question
+  question = query
+
+  stop_words = set(stopwords.words("english"))
+
+  # Tokenize the question
+  words = word_tokenize(question)
+
+  # Filter out the stop words
+  important_words = [word for word in words if word.lower() not in stop_words]
+  important_words = [word for word in important_words if word.isalnum()]
+
+  # doc caller
+  res = caller(query, emb_path)
+  # Assuming 'documents' is a list of tuples (Document object, score)
+  documents = res
+
+  # List to hold selected documents
+  selected_documents = []
+
+  # Set a threshold for minimum percentage of words that should match
+  threshold = 0.5
+
+  # Check each document for the important words
+  for document, score in documents:
+      matches = sum([1 for word in important_words if re.search(word, document.page_content, re.IGNORECASE)])
+      if len(important_words) > 0:
+        if matches / len(important_words) >= threshold:
+          selected_documents.append((document, score))
+      else:
+        selected_documents.append((document, score))
+
+
+  # Extract page_content values and create the new list "context"
+  context = [item[0].page_content for item in selected_documents]
+
+  return context
+
+
+# prompt sent to embedding to get result (context)
+def caller(req, emb_path):
+  ebname = emb_path
+  new_db = FAISS.load_local(ebname, embeddings)
+
+  query = str(req)
+  #docs = new_db.similarity_search(query)
+  docs = new_db.similarity_search_with_score(query)
+  return docs
+
+
+# llm response
+def llm_caller(res, prompt, memory, cbt_name, emb_path):
+  
+  
+  chatbot_name = cbt_name
+  eb_name = emb_path
+
+
+  
+  #parameters = {'chatbot_name': 'yoga chatbot',
+                #'embedding_name': 'yoga_chatbot'}
+  context = res
+  question = prompt
+  conversation = memory
+
+
+  response = openai.ChatCompletion.create(
+      model="gpt-3.5-turbo",
+      messages=[
+          {
+              "role": "user",
+              "content": f"I would like you to act as a knowledgeable entity that I can have a conversation with. Let's name you '{chatbot_name}'. You will provide me with answers based on the given document context and also consider our conversation history to better understand and answer my questions. If the answer is not available in the document context or our conversation, please let me know that you are unsure and refrain from answering unrelated questions. It is important to maintain continuity and never break character. To help you answer accurately, I will provide you with relevant information extracted straight from the document. Here is the document context: '{context}'. Please also consider our conversation history, which is: '{conversation}'.Now, let me ask you a question: '{question}'.\n"
+          }
+      ],
+      stream=True
+  )
+
+  output = response['choices'][0]['message']['content']
+  return output
+
+def get_previous_subject(conversation):
+    last_response = conversation[-1]['query']
+    return last_response
+
+
+
+##############################################################
+
+
+app = Flask(__name__)
+CORS(app, origins="*")
+
+from bson.objectid import ObjectId
+from werkzeug.routing import BaseConverter
+
+class ObjectIdConverter(BaseConverter):
+    def to_python(self, value):
+        return ObjectId(value)
+    
+    def to_url(self, value):
+        return str(value)
+
+app.url_map.converters['ObjectId'] = ObjectIdConverter
+
+
+# Connect to MongoDB
+#client = MongoClient('mongodb+srv://moezmazhar:OGKnnc8yTM1cYmxw@testcluster.k18rfzz.mongodb.net/')
+client = MongoClient(os.getenv('MONGO_DB_URI'))
+db = client.db_auth  # use your database
+collection = db.collection_chatbot  # use your collection
+
+chatbot_data_collection = db.Chatbot_Data
+
+
+##############################################################
+
+from bson import json_util
+import os
+import glob
+
+from bson.objectid import ObjectId
+
+#@app.route('/createcid/<user_id>', methods=['GET']) 
+@app.route('/createcid', methods=['GET']) 
+def create_cid():
+    user_id = request.args.get('user_id')
+    # Insert an empty document and get its _id
+    chatbot_id = db.Chatbot_Data.insert_one({}).inserted_id
+
+    # Prepare data to be inserted in Collection_Chatbot
+    data = {
+        "User_ID": ObjectId(user_id),  # Convert user_id from string to ObjectId
+        "Chatbot_ID": chatbot_id  # Use the _id of the newly inserted document
+    }
+
+    # Insert data into Collection_Chatbot and get its _id
+    result = db.collection_chatbot.insert_one(data)
+    collection_chatbot_id = result.inserted_id
+
+    # Return the _id of the newly inserted document in Chatbot_Data and Collection_Chatbot
+    return jsonify({
+        "Chatbot_ID": str(chatbot_id),
+        "Document_ID": str(collection_chatbot_id)
+    })
+
+
+
+#@app.route('/append-chatbot-data/<chatbot_id>', methods=['POST'])
+@app.route('/append-chatbot-data', methods=['POST'])
+def append_cid():
+    chatbot_id = request.args.get('chatbot_id')
+    data = request.get_json()  # Get JSON data from request
+
+    # Validate received data
+    if data and "chatbotsettings" in data:
+        chatbotsettings = data["chatbotsettings"]
+
+        # Make sure all necessary fields are present
+        required_fields = ["Chatbot_Name", "useCase", "BasePrompt", "aiCreativity",
+                           "Visibility", "limitTo", "everySeconds", "limitMessage"]
+        if all(field in chatbotsettings for field in required_fields):
+            # Update the document in MongoDB
+            result = db.Chatbot_Data.update_one({"_id": ObjectId(chatbot_id)}, {"$set": chatbotsettings})
+
+            # Check if a document was matched and updated
+            if result.matched_count > 0:
+                return jsonify({"_id": chatbot_id, "updated": True})
+
+    # Return an error if the data is not correctly formatted or no document was updated
+    return jsonify({"error": "Invalid data or no matching document"}), 400
+
+
+# # #
+
+
+#@app.route('/append-chatbot-appearence/<chatbot_id>', methods=['POST'])
+@app.route('/append-chatbot-appearence', methods=['POST'])
+def append_cid1():
+    chatbot_id = request.args.get('chatbot_id')
+    data = request.get_json()  # Get JSON data from request
+
+    # Validate received data
+    if data and "appearance" in data:
+        chatbotsettings = data["appearance"]
+
+        required_fields = ["displayName", "accentColor", "initialMessage", "inputPlaceholderText",
+                           "quickReplies", "theme", "chatbotProfileImage", "userMsgBgColor","aiMsgBgColor","chatIconBgColor","chatIcon"]
+        print("HI")
+        if all(field in chatbotsettings for field in required_fields):
+            # Update the document in MongoDB
+            result = db.Chatbot_Data.update_one({"_id": ObjectId(chatbot_id)}, {"$set": chatbotsettings})
+            print("result",result)
+
+            # Check if a document was matched and updated
+            if result.matched_count > 0:
+                return jsonify({"_id": chatbot_id, "updated": True})
+
+    # Return an error if the data is not correctly formatted or no document was updated
+    return jsonify({"error": "Invalid data or no matching document"}), 400
+
+
+
+
+#@app.route('/chatbot-data-get/<chatbot_id>', methods=['GET'])
+@app.route('/chatbot-data-get', methods=['GET'])
+def get_settings():
+    try:
+        chatbot_id = request.args.get('chatbot_id')
+        object_id = ObjectId(chatbot_id)
+        settings = db.Chatbot_Data.find_one({"_id": object_id})
+        if settings:
+            serialized_settings = json_util.dumps(settings)
+            return serialized_settings, 200, {'Content-Type': 'application/json'}
+        else:
+            return jsonify({"message": "Settings not found"}), 404
+    except Exception as e:
+        return jsonify({"message": str(e)}), 500
+
+
+
+
+@app.route('/get-training-data', methods=['POST'])
+def trainingdata():
+    UserID = request.json.get('User_ID')
+    ChatbotID = request.json.get('Chatbot_ID')
+
+    directory_path = f"Chatbot/{UserID}/{ChatbotID}"
+    txt_files = glob.glob(directory_path + "/*.txt")
+
+    yt_files = []
+    doc_files = []
+    audio_files = []
+    urls_files = []
+    plain_text_files = []
+
+    for file_path in txt_files:
+        filename = os.path.basename(file_path)  # Extract only the filename from the file path
+        filename_without_ext = os.path.splitext(filename)[0]  # Remove the file extension
+
+        if filename.startswith("YT_"):
+            filename_without_ext = filename_without_ext[len("YT_"):]
+            yt_files.append(filename_without_ext)
+        elif filename.startswith("Doc_"):
+            filename_without_ext = filename_without_ext[len("Doc_"):]
+            
+            '''
+            if "PlainText" in filename_without_ext:
+                plain_text_files.append(filename_without_ext)
+            else:
+            '''
+            
+            doc_files.append(filename_without_ext)
+                
+        elif filename.startswith("Plain_"):
+            filename_without_ext = filename_without_ext[len("Plain_"):]
+            plain_text_files.append(filename_without_ext)
+        elif filename.startswith("Audio_"):
+            filename_without_ext = filename_without_ext[len("Audio_"):]
+            audio_files.append(filename_without_ext)
+        elif filename.startswith("URL_"):
+            filename_without_ext = filename_without_ext[len("URL_"):]
+            #urls_files.append(filename_without_ext)
+
+            links_file_path = os.path.join(directory_path, f"LINK_{filename_without_ext}.txt")
+            with open(links_file_path, 'r') as links_file:
+                links = links_file.readlines()
+                links = [link.strip() for link in links]
+
+            urls_files.append({
+               "name": filename_without_ext,
+                "links": links
+            })
+
+    return {
+        "yt_files": yt_files,
+        "doc_files": doc_files,
+        "audio_files": audio_files,
+        "plain_text_files": plain_text_files,
+        "url_files": urls_files
+
+    }
+
+
+
+# # #
+
+
+UPLOAD_FOLDER = 'TEMP'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+@app.route('/upload', methods=['POST'])
+def upload_document():
+    # check if the post request has the file part
+    if 'file' not in request.files:
+        response = {'message': 'No file part in the request'}
+        return jsonify(response), 400
+    file = request.files['file']
+    # if user does not select file, browser also submit an empty part without filename
+    if file.filename == '':
+        response = {'message': 'No selected file'}
+        return jsonify(response), 400
+    # save file to the upload folder
+    if file:
+        filename = file.filename
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        response = {'message': 'Document uploaded successfully'}
+        return jsonify(response), 200
+
+
+
+##############################################################
+
+# FIXME
+from bson import json_util
+#@app.route('/embedding/<ObjectId:doc_id>', methods=['POST'])
+@app.route('/embedding', methods=['POST'])
+def add_data():
+    doc_id = request.args.get('doc_id')
+    
+    item = request.get_json()
+    
+    # Fetch existing data
+    existing_data = collection.find_one({'_id': ObjectId(doc_id)})
+    if existing_data is None:
+        return jsonify({'message': 'No record found for this ID'}), 404
+    #else:
+    #    return json_util.dumps(existing_data)  # Use json_util.dumps instead of jsonify
+
+    
+   
+    UserID = request.json.get('User_ID')
+    ChatbotID = request.json.get('Chatbot_ID')
+    
+    print(UserID)
+    print(ChatbotID)
+
+    def load_document(file_path):
+        print(file_path)
+        extension = file_path.split('.')[-1]
+        print(extension)
+        if extension == 'txt':
+            #print("i am txt")
+            loader = UnstructuredFileLoader(file_path)
+            documents = loader.load_and_split()  
+            text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+            docs = text_splitter.split_documents(documents)
+            return docs  # Return the loaded document
+            
+        else:
+            raise ValueError("Unsupported file format.")
+
+
+    # Construct the path to the UserID folder
+    user_folder_path = os.path.join('Chatbot/',str(UserID))
+
+    '''
+    # Check if 'embedding' directory exists in chatbot_folder_path
+    embedding_folder_path = os.path.join(chatbot_folder_path, "embeddings")
+    if os.path.exists(embedding_folder_path):
+        # If it does, remove it
+        shutil.rmtree(embedding_folder_path)
+    '''
+
+    # Create the directory if it does not exist
+    if not os.path.exists(user_folder_path):
+        os.makedirs(user_folder_path)
+
+
+    # Construct the path to the ChatbotID folder
+    chatbot_folder_path = os.path.join(user_folder_path, ChatbotID)
+
+    final_doc = []
+    try:
+        # Iterate over the files in the ChatbotID folder
+        for file_name in os.listdir(chatbot_folder_path):
+            print(file_name)
+            # Construct the path to the file
+            file_path = os.path.join(chatbot_folder_path, file_name)
+
+            doc = load_document(file_path)
+
+            # Append the document to final_doc
+            final_doc.append(doc)
+    except Exception as e:
+        print('Error:', e)
+        pass
+
+
+    result_doc = [item for sublist in final_doc for item in sublist]
+
+    db1 = FAISS.from_documents(result_doc, embeddings)
+
+    db1.save_local(str(chatbot_folder_path) + "/embeddings/")
+
+    embedding_data = {
+        'User_ID': ObjectId(item['User_ID']),
+        'Chatbot_ID': ObjectId(item['Chatbot_ID']),
+        'embedding_path': "Chatbot/" + str(UserID) + "/" + str(ChatbotID) + "/embeddings/",
+        'conversation_history': [],
+        'Conversation_Title': "First Conversation"
+    }
+
+    # Update the document
+    result = collection.update_one({'_id': ObjectId(doc_id)}, {"$set": embedding_data})
+    
+    # Update the document with the timestamp
+    #db.Chatbot_Data.update_one({'_id': ObjectId(ChatbotID)}, {"$set": {"updated_at": datetime.now()}})
+    result = db.Chatbot_Data.update_one({'_id': ObjectId(ChatbotID)}, {"$set": {"Created_at": datetime.now()}})
+
+
+    #updated_data = collection.find_one({'_id': ObjectId(doc_id)})
+    #return json_util.dumps(updated_data)    
+
+    if result.modified_count > 0:
+        return jsonify({'message': 'Data updated successfully'})
+    else:
+        return jsonify({'message': 'No changes made to the data'})
+
+
+
+    '''
+    #db.emb_col.insert_one(embedding_data)
+    result = collection.insert_one(embedding_data)
+
+    return jsonify({'message': 'Data added successfully', 'inserted_id': str(result.inserted_id)})
+    '''
+
+@app.route('/fetchtext', methods=['POST'])
+def add_textdata():
+    UserID = request.form.get('User_ID')
+    ChatbotID = request.form.get('Chatbot_ID')
+
+    UPLOAD_FOLDER = 'TEMP'
+    app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+    # check if the post request has the file part
+    if 'file' not in request.files:
+        response = {'message': 'No file part in the request'}
+        return jsonify(response), 400
+
+    files = request.files.getlist('file')  # Retrieve a list of files
+
+    for file in files:
+        if file.filename == '':
+            continue  # Skip if the file name is empty
+
+        filename = file.filename
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        Docs_Path = file_path
+
+        try:
+            file_name = os.path.basename(Docs_Path)
+            print("file:  ", Docs_Path)
+            Docs_Create = Document_Creation(Docs_Path)
+
+            # Create the directory if it doesn't exist
+            directory = f"Chatbot/{UserID}/{ChatbotID}"
+            os.makedirs(directory, exist_ok=True)
+
+            # Create the file path
+            filepath = os.path.join(directory, f"Plain_{file_name}.txt")
+
+            # Write the contents of docs into the text file
+            with open(filepath, 'w', encoding='utf-8') as file:
+                for doc in Docs_Create:
+                    file.write(doc.page_content)
+
+            # delete the file after saving it
+            os.remove(file_path)
+
+        except Exception as e:
+            print('Error in Document:', e)
+            return jsonify({"error": str(e)})
+
+    return jsonify({"message": "Content from Document inserted into the file."})
+
+
+
+@app.route('/fetchdocs', methods=['POST'])
+def add_Docdata():
+    UserID = request.form.get('User_ID')
+    ChatbotID = request.form.get('Chatbot_ID')
+
+    UPLOAD_FOLDER = 'TEMP'
+    app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+    # check if the post request has the file part
+    if 'file' not in request.files:
+        response = {'message': 'No file part in the request'}
+        return jsonify(response), 400
+
+    files = request.files.getlist('file')  # Retrieve a list of files
+
+    for file in files:
+        if file.filename == '':
+            continue  # Skip if the file name is empty
+
+        filename = file.filename
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        Docs_Path = file_path
+
+        try:
+            file_name = os.path.basename(Docs_Path)
+            print("file:  ", Docs_Path)
+            Docs_Create = Document_Creation(Docs_Path)
+
+            # Create the directory if it doesn't exist
+            directory = f"Chatbot/{UserID}/{ChatbotID}"
+            os.makedirs(directory, exist_ok=True)
+
+            # Create the file path
+            filepath = os.path.join(directory, f"Doc_{file_name}.txt")
+
+            # Write the contents of docs into the text file
+            with open(filepath, 'w', encoding='utf-8') as file:
+                for doc in Docs_Create:
+                    file.write(doc.page_content)
+
+            # delete the file after saving it
+            os.remove(file_path)
+
+        except Exception as e:
+            print('Error in Document:', e)
+            return jsonify({"error": str(e)})
+
+    return jsonify({"message": "Content from Document inserted into the file."})
+
+@app.route('/fetchaudio', methods=['POST'])
+def add_data_audio():
+    UserID = request.form.get('User_ID')
+    ChatbotID = request.form.get('Chatbot_ID')
+    
+    UPLOAD_FOLDER = 'TEMP'
+    app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+    
+    # check if the post request has the file part
+    if 'file' not in request.files:
+        response = {'message': 'No file part in the request'}
+        return jsonify(response), 400
+    file = request.files['file']
+    # if user does not select file, browser also submit an empty part without filename
+    if file.filename == '':
+        response = {'message': 'No selected file'}
+        return jsonify(response), 400
+    # save file to the upload folder
+    if file:
+        filename = file.filename
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        audio_path = file_path
+        #response = {'message': 'Document uploaded successfully', 'Docs_Path': Docs_Path}
+        #return jsonify(response), 200
+
+
+    #audio_path = request.json.get('Audio_Path')
+    audio_name = os.path.basename(audio_path)
+    mp3_name = os.path.splitext(audio_name)[0]
+
+
+    try: 
+        Audio_doc = Audio_Crawler(audio_path)
+
+        # Create the directory if it doesn't exist
+        directory = f"/Chatbot/{UserID}/{ChatbotID}"
+        os.makedirs(directory, exist_ok=True)
+        # Create the file path
+        file_path = os.path.join(directory, f"Audio_{mp3_name}.txt")
+
+
+        # Write the contents of docs into the text file
+        with open(file_path, 'w') as file:
+            for doc in Audio_doc:
+                file.write(doc.page_content)
+
+        # delete the file after saving it
+        os.remove(file_path)
+        
+       
+        return jsonify({"message": "Content from Audio inserted into the text file."})
+        
+    except Exception as e:
+        print('Error in Audio:', e)
+        return jsonify({"error": str(e)})
+        #return jsonify({"error": "An error occurred during the process."})
+
+
+
+@app.route('/remove', methods=['POST'])
+def remove_paragraphs():
+    UserID =  request.json.get('UserID')
+    Chatbot_ID =  request.json.get('Chatbot_ID')
+    urls_to_search = request.json.get('urls')
+
+
+    print(UserID)
+    print(Chatbot_ID)
+    domain = re.search(r"https?://(www\.)?([a-zA-Z0-9-]+(\.[a-zA-Z]+)+)", urls_to_search[0])
+    if domain:
+        domain = domain.group(0).replace("https://", "").replace("http://", "")
+
+    print(domain)
+    directory = f"Chatbot/{UserID}/{Chatbot_ID}"
+    os.makedirs(directory, exist_ok=True)
+    file_path_URL = os.path.join(directory, f"URL_{domain}.txt")
+    link_pathfile = os.path.join(directory, f"LINK_{domain}.txt")
+
+    print(link_pathfile)
+    #file_path = "/content/LINKS_www.teachatea.com.txt"  # Replace with the actual file path
+    #file_path_URL = "/content/URL_www.teachatea.com.txt"  # Replace with the actual file path
+
+    response = []
+
+    for url in urls_to_search:
+        results = search_urls(url, link_pathfile)
+        if results:
+            for index, found_url in results:
+                remove_paragraph_by_index(index, file_path_URL)
+                response.append({
+                    "message": "Paragraph removed successfully.",
+                    "url": url,
+                    "index": index
+                })
+        else:
+            response.append({
+                "message": "No matching URLs found.",
+                "url": url,
+            })
+
+    return jsonify(response)
+
+
+
+# FIXME
+@app.route('/fetchurl', methods=['POST'])
+def add_data_url():
+    UserID = request.json.get('User_ID')
+    Chatbot_ID = request.json.get('Chatbot_ID')
+    URL = request.json.get('URL')
+    print(UserID)
+    print(URL)
+    
+    URL_l = []  # Assign an empty list as the default value
+    URL_char = []  # Assign an empty list as the default value
+
+    try:
+        URL_l, URL_char = URL_Crawler(URL,UserID,Chatbot_ID)
+    except Exception as e:
+        print('error in url: ', e)
+        pass
+
+    return jsonify({
+        'links': URL_l,
+        'characters': URL_char
+    })
+
+
+@app.route('/fetchyt', methods=['POST'])
+def add_YTdata():
+    UserID = request.json.get('User_ID')
+    ChatbotID = request.json.get('Chatbot_ID')
+    YT_URL = request.json.get('YT_URL')
+
+    try:
+        YT_doc, title = YT_Crawler(YT_URL)
+
+        # Create the directory if it doesn't exist
+        directory = f"/Chatbot/{UserID}/{ChatbotID}"
+        os.makedirs(directory, exist_ok=True)
+        # Create the file path
+        file_path = os.path.join(directory, f"YT_{title}.txt")
+
+        # Write the contents of docs into the text file
+        with open(file_path, 'w') as file:
+            for doc in YT_doc:
+                file.write(doc.page_content)
+
+        return jsonify({"message": "Content from YouTube inserted into the text file."})
+
+    except Exception as e:
+        print('Error in YouTube:', e)
+        #return jsonify({"error": "An error occurred during the process."})
+        return jsonify({"error": str(e)})
+
+
+
+##############################################################
+
+
+
+@app.route('/chat', methods=['GET'])
+def get_all_data():
+    data = list(collection.find({}))
+    for doc in data:
+        doc['_id'] = str(doc['_id'])
+    json_data = json.dumps(data, default=json_util.default)
+    return jsonify(json.loads(json_data))
+
+
+# Define a route to get data by user_id
+#@app.route('/user/<ObjectId:User_ID>', methods=['GET'])
+@app.route('/user', methods=['GET'])
+def get_user_chatbots():
+    User_ID = request.args.get('User_ID')
+    items_cursor = collection.find({'User_ID': ObjectId(User_ID)})
+    unique_chatbots = {}  # Initialize an empty dictionary to hold unique chatbot data
+    for item in items_cursor:
+        chatbot_id = str(item['Chatbot_ID'])
+
+        try:
+            # Look up chatbot name in the Chatbot_Data collection using Chatbot_ID
+            chatbot_data = db.Chatbot_Data.find_one({'_id': ObjectId(chatbot_id)})
+            if chatbot_data:
+                cbt_name = chatbot_data['Chatbot_Name']
+                # Only add the chatbot data to unique_chatbots if it is not already present
+                if chatbot_id not in unique_chatbots:
+                    unique_chatbots[chatbot_id] = cbt_name
+            else:
+                return jsonify({'message': 'Chatbot data not found'}), 404
+        except:
+            pass
+
+    # Convert the unique_chatbots dictionary into a list of dictionaries
+    unique_chatbots_list = [{'Chatbot_ID': id, 'Chatbot_Name': name} for id, name in unique_chatbots.items()]
+        
+    if unique_chatbots_list:
+        return jsonify(unique_chatbots_list)
+    return jsonify([])
+    #return jsonify({'message': 'Data not found'})
+
+
+# Define a route to get data by chatbot_id
+#@app.route('/chatbot/<ObjectId:Chatbot_ID>', methods=['GET'])
+@app.route('/chatbot', methods=['GET'])
+def get_user_conversations():
+    Chatbot_ID = request.args.get('Chatbot_ID')
+    items_cursor = collection.find({'Chatbot_ID': ObjectId(Chatbot_ID)})
+    items = []
+    for item in items_cursor:
+        item['_id'] = str(item['_id'])
+        item['User_ID'] = str(item['User_ID'])
+        item['Chatbot_ID'] = str(item['Chatbot_ID'])
+        items.append(item)
+    if items:
+        return jsonify(items)        
+    return jsonify({'message': 'Data not found'})
+
+
+@app.route('/getchat', methods=['GET'])
+def get_data():
+    _id = request.args.get('_id')
+    item = collection.find_one({'_id': ObjectId(_id)})
+
+    if item:
+        # MongoDB's _id cannot be serialized to JSON directly, so convert it to string
+        item['_id'] = str(item['_id'])
+        item['User_ID'] = str(item['User_ID'])
+        item['Chatbot_ID'] = str(item['Chatbot_ID'])
+        return jsonify(item)
+
+    return jsonify({'message': 'Data not found'})
+
+
+'''
+# Define a route to get data by _id
+#@app.route('/chat/<ObjectId:_id>', methods=['GET'])
+@app.route('/getchat', methods=['GET'])
+def get_data():
+    _id = request.args.get('_id')
+    items_cursor = collection.find_one({'_id': ObjectId(_id)})
+    items = []
+    for item in items_cursor:
+        item['_id'] = str(item['_id'])
+        item['User_ID'] = str(item['User_ID'])
+        item['Chatbot_ID'] = str(item['Chatbot_ID'])
+        items.append(item)
+    if items:
+        return jsonify(items)  
+    return jsonify({'message': 'Data not found'})
+'''
+
+'''
+    if item:
+        # MongoDB's _id cannot be serialized to JSON directly, so convert it to string
+        item['_id'] = str(item['_id'])
+        item['User_ID'] = str(item['User_ID'])
+        item['Chatbot_ID'] = str(item['Chatbot_ID'])
+        
+        return jsonify(item)
+    '''
+
+
+@app.route('/newvchat', methods=['GET'])
+def create_vchatbot():
+    try:
+        Chatbot_ID = request.args.get('Chatbot_ID')
+        
+        # Get the first and last chatbot data
+        items_cursor = collection.find({'Chatbot_ID': ObjectId(Chatbot_ID)}).sort('_id', 1)
+        first_item = None
+        last_item = None
+        for item in items_cursor:
+            if not first_item:
+                first_item = item
+            last_item = item
+    
+        if last_item:
+            last_item['_id'] = str(last_item['_id'])
+            last_item['User_ID'] = str(last_item['User_ID'])
+            last_item['Chatbot_ID'] = str(last_item['Chatbot_ID'])
+    
+            data = last_item.copy()  
+            data.pop('_id')  
+            data['conversation_history'] = []  
+            data['Conversation_Title'] = 'New Conversation'  
+    
+            data['User_ID'] = ObjectId(data['User_ID'])
+            data['Chatbot_ID'] = ObjectId(data['Chatbot_ID'])
+            
+            try:
+                result = collection.insert_one(data)
+            except Exception as e:
+                return jsonify({'message': 'Error occurred while inserting data', 'error': str(e)}), 500
+    
+            # Return the new document's id, first chatbot _id and last chatbot _id
+            return jsonify({
+                'new_id': str(result.inserted_id), 
+                'first_chatbot_id': str(first_item['_id']) if first_item else None, 
+                'last_chatbot_id': str(last_item['_id'])
+            })
+        else:
+            return jsonify({'message': 'Data not found'}), 404
+    
+    except:    
+        Chatbot_ID = request.args.get('Chatbot_ID')
+        
+        # Find the last item of the chatbot by sorting in descending order and getting the first item.
+        item_cursor = collection.find({'Chatbot_ID': ObjectId(Chatbot_ID)}).sort('_id', -1).limit(1)
+        item = None
+        for i in item_cursor:
+            item = i
+    
+        if item:
+            item['_id'] = str(item['_id'])
+            item['User_ID'] = str(item['User_ID'])
+            item['Chatbot_ID'] = str(item['Chatbot_ID'])
+    
+            data = item.copy()  
+            data.pop('_id')  
+            data['conversation_history'] = []  
+            data['Conversation_Title'] = 'New Conversation'  
+    
+            data['User_ID'] = ObjectId(data['User_ID'])
+            data['Chatbot_ID'] = ObjectId(data['Chatbot_ID'])
+            
+            try:
+                result = collection.insert_one(data)
+            except Exception as e:
+                return jsonify({'message': 'Error occurred while inserting data', 'error': str(e)}), 500
+    
+            # Return the new document's id
+            return jsonify({'new_id': str(result.inserted_id)})
+        else:
+            return jsonify({'message': 'Data not found'}), 404
+    
+
+#@app.route('/newchat/<ObjectId:_id>', methods=['GET'])
+@app.route('/newchat', methods=['GET'])
+def create_chatbot():
+    _id = request.args.get('_id')
+    item = collection.find_one({'_id': ObjectId(_id)})
+    if item:
+        item['_id'] = str(item['_id'])
+        item['User_ID'] = str(item['User_ID'])
+        item['Chatbot_ID'] = str(item['Chatbot_ID'])
+
+        data = item.copy()  
+        data.pop('_id')  
+        data['conversation_history'] = []  
+        data['Conversation_Title'] = 'New Conversation'  
+
+        data['User_ID'] = ObjectId(data['User_ID'])
+        data['Chatbot_ID'] = ObjectId(data['Chatbot_ID'])
+        
+        try:
+            result = collection.insert_one(data)
+        except Exception as e:
+            return jsonify({'message': 'Error occurred while inserting data', 'error': str(e)}), 500
+
+        # Return the new document's id
+        return jsonify({'new_id': str(result.inserted_id)})
+    else:
+        return jsonify({'message': 'Data not found'}), 404
+
+
+
+
+#@app.route('/chat/<ObjectId:_id>', methods=['POST'])
+@app.route('/chat', methods=['POST'])
+def chat():
+    _id = request.args.get('_id')
+    
+    # Get the user message from the request data
+    msg = request.json.get('user_message')
+    UserID = request.json.get('User_ID')
+    ChatbotName = request.json.get('Chatbot_Name')
+    ChatbotID = request.json.get('Chatbot_ID')
+
+    
+    item = collection.find_one({'_id': ObjectId(_id)})
+
+    if item:
+        # MongoDB's _id cannot be serialized to JSON directly, so convert it to string
+        item['_id'] = str(item['_id'])
+        item['User_ID'] = str(item['User_ID'])
+        item['Chatbot_ID'] = str(item['Chatbot_ID'])
+
+        # Look up chatbot name in the Chatbot_Data collection using Chatbot_ID
+        chatbot_data = db.Chatbot_Data.find_one({'_id': ObjectId(item['Chatbot_ID'])})
+        if chatbot_data:
+            cbt_name = chatbot_data['Chatbot_Name']
+            print(item['_id'])
+            print(cbt_name)
+        else:
+            return jsonify({'message': 'Chatbot data not found'}), 404
+            
+        emb_path = item['embedding_path']
+        print('path: ',emb_path)
+
+        conversations = item['conversation_history']
+        print('conversation history: ', conversations)
+
+        try:
+          last_response = get_previous_subject(conversations)
+          query_n = "(" + last_response + ")" + msg
+        except:
+          query_n = msg
+
+        print('query_n   ',query_n)
+        res = indexer(query_n, emb_path)
+        print('res   ',res)
+        memory = conversations[-3:]
+        print(memory)
+        result = llm_caller(res, msg, memory, cbt_name, emb_path)
+        print(result)
+
+        # Append a string to the conversation
+        #conversations.append({"query": msg, "response": result})
+        from datetime import datetime
+
+        # Append a string to the conversation with timestamp
+        timestamp = datetime.now().isoformat()
+        conversations.append({
+            "timestamp": timestamp,
+            "query": msg,
+            "response": result
+        })
+
+
+        # Update the conversation_history in the database
+        try:
+            collection.update_one(
+                {'_id': ObjectId(_id)},
+                {'$set': {'conversation_history': conversations}}
+            )
+        except:
+            collection.update_many(
+                {'_id': ObjectId(_id)},
+                {'$set': {'conversation_history': conversations}}
+            )
+
+
+        
+        # Return the response
+        #return jsonify({'response': result})
+        return jsonify({
+            'timestamp': timestamp,
+            'response': result
+        })
+        #return jsonify(item)
+    
+    return jsonify({'message': 'Data not found'})
+
+@app.route('/delete-training-data', methods=['POST'])
+def deletetrainingdata():
+    UserID = request.json.get('User_ID')
+    ChatbotID = request.json.get('Chatbot_ID')
+    files_to_delete = request.json.get('files')
+
+    directory_path = f"Chatbot/{UserID}/{ChatbotID}"
+    
+    # Get the list of all files in directory
+    existing_files = os.listdir(directory_path)
+
+    status = ''
+    
+    for file_name in files_to_delete:
+        # Iterate over each existing file in the directory
+        for existing_file in existing_files:
+            # Check if file name contains underscore
+            if "_" in existing_file and existing_file.endswith('.txt.txt'):
+                # Remove the type and double extension from the existing file name
+                existing_file_name = existing_file.split('_', 1)[1][:-4]  # Remove type and the last '.txt'
+                # Compare to the requested file to delete
+                if existing_file_name == file_name:
+                    # Match found, delete the file
+                    file_path = os.path.join(directory_path, existing_file)
+                    try:
+                        os.remove(file_path)
+                        status += f'File {file_path} successfully deleted. '
+                    except Exception as e:
+                        status += f'Failed to delete file {file_path}: {e}. '
+                    break  # Move to the next file to delete
+        else:  # No break occurred, no matching file was found
+            status += f'No matching file found for {file_name}. '
+            
+    return {'status': status}
+
+
+
+
+
+from bson.objectid import ObjectId
+@app.route('/delete_chatbot', methods=['POST'])
+def delete_chatbot():
+    user_id = request.json.get('User_ID')
+    chatbot_id = request.json.get('Chatbot_ID')
+
+    if chatbot_id and user_id:
+
+        try:
+            # Delete from the main collection
+            query = {
+                'User_ID': ObjectId(user_id),
+                'Chatbot_ID': ObjectId(chatbot_id)
+            }
+            result = collection.delete_one(query)
+            
+            if result.deleted_count > 0:
+                print('Chatbot document deleted from MongoDB')
+            else:
+                print('Chatbot document not found in MongoDB')
+        except Exception as e:
+            return f'Error deleting chatbot document from MongoDB: {e}', 500
+
+        try:
+            # Delete from the Chatbot_Data collection
+            query_chatbot_data = {
+                '_id': ObjectId(chatbot_id)
+            }
+            result_chatbot_data = chatbot_data_collection.delete_many(query_chatbot_data)
+            
+            if result_chatbot_data.deleted_count > 0:
+                print('Chatbot data documents deleted from MongoDB')
+            else:
+                print('Chatbot data documents not found in MongoDB')
+        except Exception as e:
+            return f'Error deleting chatbot data documents from MongoDB: {e}', 500
+        
+        # Delete from file-system
+        folder_path = f"Chatbot/{user_id}/{chatbot_id}"
+        try:
+            os.rmdir(folder_path)
+            print('Folder deleted from file system')
+        except OSError as e:
+            print(f'Error deleting folder from file system: {e}')
+        
+        return 'Chatbot deleted successfully', 200
+    else:
+        return 'Invalid request data', 400
+
+
+
+@app.route('/demo', methods=['GET'])
+def demo():
+    return jsonify({
+        "ENV": os.getenv('ENV'),
+        "MONGO_DB_URI": os.getenv('MONGO_DB_URI'),
+        "PORT": os.getenv('PORT'),
+    })
+
+# Run the application
+if __name__ == '__main__':
+#     app.run(debug=True)
+      app.run(host='0.0.0.0', threaded=True, port=os.getenv('PORT'))
